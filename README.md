@@ -39,8 +39,7 @@ Un entorno de escritorio móvil fluido, minimalista e hiper-personalizable inspi
 * **LÖVE 11.x (LOVE2D)** para Windows, Linux, macOS o Android.
 
 ### Ejecución
-1. Clona el repositorio o descarga el código fuente:
-   git clone https://github.com/tu-usuario/mios-light.git
+1. Clona el repositorio o descarga el código fuente
 
 2. Ejecuta el proyecto en LÖVE2D:
    * **En PC (Windows/Linux):** Arrastra la carpeta del proyecto a la ejecutable love.exe o corre en consola: love .
