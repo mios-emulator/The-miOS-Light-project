@@ -1,51 +1,64 @@
-# 🚀 The miOS Light Project
+# 📱 miOS Light v1.1.0
 
-Un simulador de sistema operativo ultra fluido, ligero y de alto rendimiento diseñado para Android, construido desde cero utilizando el motor **LÖVE2D (Lua)**.
-
----
-
-## ⚡ Rendimiento y Visuales
-
-A diferencia de las versiones tradicionales basadas en el entorno Java de Android, **miOS Light** está pensado para exprimir al máximo el hardware con un consumo mínimo de recursos.
-
-- **120 FPS Estables / Unlock FPS:** Tiempos de frame promedio de **~8.5ms**.
-- **Consumo Mínimo de Memoria:** Apenas **~1.4 MB de RAM** en ejecución.
-- **Efecto Liquid Glass:** Renderizado de transparencias y capas de cristal en tiempo real con aceleración por hardware.
-- **Animaciones de Físicas:** Transiciones, aperturas y cierres de aplicaciones totalmente fluidas.
+Un entorno de escritorio móvil fluido, minimalista e hiper-personalizable inspirado en sistemas operativos modernos, desarrollado enteramente en **Lua** con la librería **LÖVE (LOVE2D)**.
 
 ---
 
-## 📱 Distribución e Instalación
+## ✨ Características Principales
 
-Para garantizar la compatibilidad entre una amplia variedad de dispositivos y maximizar el rendimiento según la tasa de refresco, el proyecto se distribuye en **4 variantes independientes**:
+### 🔮 Interfaz Liquid Glass & Renderizado
+* **Efectos de vidrio líquido**: Blur y refracción realista en tiempo real mediante shaders GLSL (GLASS_SRC).
+* **Soporte multitema**: Gradientes procedurales y orbes animados con 7 paletas personalizadas (Noche, Océano, Atardecer, Bosque, Rosa, Grafito, Aurora).
+* **Fondo dinámico**: Soporte para fotos de fondo personalizadas mediante archivos .png o .jpg colocados en la carpeta wallpapers/.
+* **Personalización total de íconos**: Cambio de tamaño, recorte por formas geométricas (Cuadrado, Normal, Suave, Círculo) mediante mask shaders, y visibilidad de etiquetas.
 
-| Variante | Compatibilidad Android | Sincronización Vertical (VSync) | Caso de uso ideal |
-| :--- | :--- | :--- | :--- |
-| **Standard** | Android 6.0 – 9.0 | VSync Activado (`vsync = 1`) | Dispositivos antiguos / tablets (ej. Fire OS). Ahorro de batería y 60 FPS estables. |
-| **Standard (Unlock FPS)** | Android 6.0 – 9.0 | VSync Desactivado (`vsync = 0`) | Rendimiento máximo sin límites en hardware legacy. |
-| **Fix** | Android 9.0 – 17+ | VSync Activado (`vsync = 1`) | Sistemas modernos (Xiaomi, Honor, etc.) con verificaciones de SDK estrictas. |
-| **Fix (Unlock FPS)** | Android 9.0 – 17+ | VSync Desactivado (`vsync = 0`) | Pantallas de alta tasa de refresco (90Hz, 120Hz, 144Hz) y pruebas de rendimiento. |
+### 🏝️ Isla Dinámica (Dynamic Island)
+* Interacción táctil interactiva con animaciones de resorte (spring physics).
+* **Alertas y avisos contextuales**: Notificaciones de estado, conectividad y reproducción de medios.
+* **Tarjeta de reproducción integrada**: Controles multimedia completos (Play/Pausa, Anterior, Siguiente) e interacción mediante arrastre (seeking) en la barra de progreso.
+* **Acceso rápido**: Expandible desde la píldora para interactuar con los ajustes sin interrumpir la navegación.
 
----
+### 🎛️ Centro de Control
+* Panel deslizante con difuminado dinámico (background blur).
+* Botones de alternancia directa: Modo Avión, Datos móviles, Wi-Fi, Bluetooth, No Molestar, Linterna, Rotación y Ahorro de batería.
+* Controles táctiles precisos mediante sliders deslizables para la gestión de **Brillo** y **Volumen**.
 
-## 📂 Estructura del Código
-
-- **`main.lua`**: Bucle principal, gestión de eventos, pipeline de renderizado y motor visual.
-- **`conf.lua`**: Configuración de ventana, gráficos, VSync y parámetros del motor LÖVE2D.
-- **`miniapps.lua`**: Módulo con las mini aplicaciones integradas (Calculadora, juegos, utilidades).
-
----
-
-## 🖼️ Personalización y Archivos
-
-Para cargar tus propios fondos de pantalla desde la app de Ajustes, coloca tus imágenes dentro de la carpeta local de tu almacenamiento:
-
-```text
-wallpapers/  --> Soporta formatos .png y .jpg
-```
+### 📱 Mini-Apps y Utilidades Incluidas
+* **Ajustes**: Panel completo con persistencia de datos local (settings.txt).
+* **Reproductor de Música**: Reconocimiento de pistas locales, portadas de álbumes y medidor de ondas de audio (Equalizer bars).
+* **Herramientas de Productividad y Entretenimiento**:
+  * Notas y utilidades básicas.
+  * Juego integrado 2048.
+  * Accesos directos a aplicaciones web (WhatsApp, Google, TikTok, YouTube).
 
 ---
 
-## 📄 Licencia
+## 🛠️ Requisitos e Instalación
 
-Este proyecto está bajo la licencia **GNU General Public License v3.0 (GPL-3.0)**. Puedes consultar el archivo `LICENSE` para obtener más información.
+### Requisitos Previos
+* **LÖVE 11.x (LOVE2D)** para Windows, Linux, macOS o Android.
+
+### Ejecución
+1. Clona el repositorio o descarga el código fuente:
+   git clone https://github.com/tu-usuario/mios-light.git
+
+2. Ejecuta el proyecto en LÖVE2D:
+   * **En PC (Windows/Linux):** Arrastra la carpeta del proyecto a la ejecutable love.exe o corre en consola: love .
+   * **En Android:** Empaqueta en formato .love o abrí la carpeta directamente usando un lanzador compatible como Löve2droid.
+
+---
+
+## ⚙️ Estructura del Proyecto
+
+* main.lua: Lógica principal del sistema, renderizado de la UI, animaciones y shaders.
+* conf.lua: Configuración global de la ventana y parámetros de prueba en PC (relación de aspecto móvil 390x844).
+* miniapps.lua: Módulo contenedor de miniaplicaciones y herramientas lógicas integradas.
+* music.lua: Módulo de audio, gestión de listas de reproducción y extracción/dibujado de carátulas.
+* assets/: Carpeta contenedora de imágenes e íconos (logo.png, icon_*.png).
+* wallpapers/: Directorio donde el usuario puede colocar carpetas de imágenes personalizadas.
+
+---
+
+## 📜 Licencia
+
+Desarrollado de forma abierta bajo licencia GPLv3.
