@@ -1,4 +1,4 @@
--- main.lua - miOS Next v1.0 (Liquid Glass + Dynamic Island + Rendimiento, Notas y 2048)
+-- main.lua - miOS Light v1.1 (Liquid Glass + Dynamic Island + Rendimiento, Notas y 2048)
 local apps = {
   {name="WhatsApp", file="icon_whatsapp.png", color={0.15,0.75,0.40}, dock=true, url="https://web.whatsapp.com"},
   {name="Google",   file="icon_google.png",   color={0.26,0.52,0.96}, dock=true, url="https://www.google.com"},
@@ -7,11 +7,14 @@ local apps = {
   {name="Ajustes",  icon="gear", color={0.56,0.58,0.64}, settings=true},
 }
 local miniapps = require("miniapps")
+local music = require("music")
 
 local FONT_FILE = nil
 local LOCK_TEXT = "Deslizá para desbloquear"
 local ASK_BEFORE_OPEN = true
 local LIQUID_GLASS = true
+local BOOT_ENABLED = true   -- pantalla de arranque al abrir miOS Next
+local BOOT_TIME = 15        -- duración del boot en segundos
 
 local DAYS = {"Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"}
 local MONTHS = {"enero","febrero","marzo","abril","mayo","junio","julio",
@@ -55,6 +58,10 @@ local ISLAND_ENABLED = true
 local ISLAND_TOP = 10 -- separación desde el borde de arriba (en U)
 local island = {mode = "idle", modeT = 0, w = 0, h = 0, wv = 0, hv = 0,
                 notice = nil, noticeT = 0, noticeDur = 2, cardT = 0, touch = nil}
+
+-- boot
+local boot = {on = false, t = 0, out = 1}
+local bootLogo, bootLogoQuad, bootLogoQs = nil, nil, nil
 
 -- liquid glass
 local glass, shaderErr = nil, nil
@@ -160,6 +167,21 @@ local function mkfont(sz)
   return love.graphics.newFont(sz)
 end
 
+-- recorta los íconos PNG con la forma elegida (círculo, suave, etc.)
+local ICON_MASK_SRC = [==[
+uniform vec4 qrect;
+uniform float rad;
+uniform float px;
+vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+  vec2 uv = (tc - qrect.xy) / qrect.zw;
+  vec2 q = abs(uv - 0.5) - (0.5 - rad);
+  float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - rad;
+  float m = clamp(0.5 - d * px, 0.0, 1.0);
+  return Texel(tex, tc) * color * m;
+}
+]==]
+local iconMask = nil
+
 local function loadImage(name)
   for _, p in ipairs({name, "assets/" .. name}) do
     if love.filesystem.getInfo(p) then
@@ -213,6 +235,12 @@ local themes = {
    orbs = {{1.00, 0.40, 0.35}, {1.00, 0.65, 0.20}, {0.90, 0.25, 0.60}, {0.60, 0.30, 0.90}}},
   {name = "Bosque",    c1 = {0.04, 0.16, 0.10}, c2 = {0.01, 0.05, 0.03},
    orbs = {{0.20, 0.80, 0.45}, {0.75, 0.90, 0.30}, {0.10, 0.60, 0.60}, {0.95, 0.85, 0.35}}},
+  {name = "Rosa",      c1 = {0.24, 0.07, 0.17}, c2 = {0.07, 0.02, 0.05},
+   orbs = {{1.00, 0.45, 0.75}, {0.95, 0.30, 0.55}, {0.80, 0.40, 1.00}, {1.00, 0.70, 0.80}}},
+  {name = "Grafito",   c1 = {0.13, 0.13, 0.15}, c2 = {0.02, 0.02, 0.03},
+   orbs = {{0.70, 0.72, 0.80}, {0.45, 0.50, 0.60}, {0.85, 0.85, 0.90}, {0.35, 0.40, 0.50}}},
+  {name = "Aurora",    c1 = {0.03, 0.14, 0.16}, c2 = {0.02, 0.03, 0.08},
+   orbs = {{0.20, 0.95, 0.70}, {0.40, 0.50, 1.00}, {0.75, 0.35, 0.95}, {0.20, 0.80, 0.95}}},
 }
 local themeIdx = 1
 
@@ -221,6 +249,70 @@ local function applyTheme(i)
   local t = themes[i]
   wall = makeGradient(t.c1, t.c2)
   for k, o in ipairs(orbs) do o[4] = t.orbs[k] end
+end
+
+-- personalización: fondo de pantalla e íconos
+local SHAPES = {
+  {name = "Cuadrado", r = 0.08},
+  {name = "Normal",   r = 0.22},
+  {name = "Suave",    r = 0.32},
+  {name = "Círculo",  r = 0.50},
+}
+local P = {orbs = true, dim = 0, iconSize = 0.5, shape = 2, labels = true, wall = nil}
+local wallFiles, wallImg = {}, nil   -- fotos de la carpeta wallpapers/
+
+local function shapeR() return SHAPES[P.shape].r end
+local function iconPx() return (48 + 24 * P.iconSize) * U end
+
+local function scanWallpapers()
+  wallFiles = {}
+  local ok, items = pcall(love.filesystem.getDirectoryItems, "wallpapers")
+  if not ok or not items then return end
+  table.sort(items)
+  for _, f in ipairs(items) do
+    local ext = f:match("%.(%w+)$")
+    ext = ext and ext:lower()
+    if ext == "png" or ext == "jpg" or ext == "jpeg" then
+      wallFiles[#wallFiles + 1] = f
+    end
+  end
+end
+
+-- name = nil: sin foto (se usa el color del tema). Devuelve false si no pudo cargarla
+local function setWallpaper(name)
+  wallImg, P.wall = nil, nil
+  if not name then return true end
+  local ok, img = pcall(love.graphics.newImage, "wallpapers/" .. name)
+  if ok and img then
+    img:setFilter("linear", "linear")
+    wallImg, P.wall = img, name
+    return true
+  end
+  return false
+end
+
+local function wallIndex()
+  if P.wall then
+    for i, f in ipairs(wallFiles) do
+      if f == P.wall then return i end
+    end
+  end
+  return 0
+end
+
+local function cycleWall(dir)
+  local n = #wallFiles
+  if n == 0 then return end
+  local i = wallIndex()
+  for _ = 1, n + 1 do
+    i = (i + dir) % (n + 1)
+    if i == 0 then
+      setWallpaper(nil)
+      return
+    end
+    if setWallpaper(wallFiles[i]) then return end
+  end
+  setWallpaper(nil)
 end
 
 local SAVE_FILE = "settings.txt"
@@ -232,8 +324,14 @@ local function saveSettings()
     "island=" .. (ISLAND_ENABLED and 1 or 0),
     string.format("bright=%.3f", ccVal[1]),
     string.format("vol=%.3f", ccVal[2]),
+    "orbs=" .. (P.orbs and 1 or 0),
+    string.format("dim=%.3f", P.dim),
+    string.format("isize=%.3f", P.iconSize),
+    "shape=" .. P.shape,
+    "labels=" .. (P.labels and 1 or 0),
   }
   for i = 1, #ccOn do t[#t + 1] = "cc" .. i .. "=" .. (ccOn[i] and 1 or 0) end
+  if P.wall then t[#t + 1] = "wall=" .. P.wall end
   pcall(love.filesystem.write, SAVE_FILE, table.concat(t, "\n"))
 end
 
@@ -248,8 +346,43 @@ local function loadSettings()
   if kv.island then ISLAND_ENABLED = (kv.island == 1) end
   if kv.bright then ccVal[1] = clamp(kv.bright, 0, 1) end
   if kv.vol then ccVal[2] = clamp(kv.vol, 0, 1) end
+  if kv.orbs then P.orbs = (kv.orbs == 1) end
+  if kv.dim then P.dim = clamp(kv.dim, 0, 1) end
+  if kv.isize then P.iconSize = clamp(kv.isize, 0, 1) end
+  if kv.shape and SHAPES[kv.shape] then P.shape = kv.shape end
+  if kv.labels then P.labels = (kv.labels == 1) end
+  local wn = str:match("wall=([^\r\n]+)")
+  if wn then
+    for _, f in ipairs(wallFiles) do
+      if f == wn then
+        setWallpaper(wn)
+        break
+      end
+    end
+  end
   for i = 1, #ccOn do
     if kv["cc" .. i] then ccOn[i] = (kv["cc" .. i] == 1) end
+  end
+end
+
+-- posición y tamaño de los íconos (se vuelve a llamar al cambiar el tamaño en Ajustes)
+local function layoutIcons()
+  local size, cellW = iconPx(), W / 4
+  local gi, di = 0, 0
+  local dh = 84 * U
+  local dy = H - dh - 20 * U
+  for _, a in ipairs(apps) do
+    a.s = size
+    if a.dock then
+      local slot = (W - 32 * U) / 4
+      a.x = 16 * U + di * slot + (slot - size) / 2
+      a.y = dy + (dh - size) / 2
+      di = di + 1
+    else
+      a.x = (gi % 4) * cellW + (cellW - size) / 2
+      a.y = 200 * U + math.floor(gi / 4) * 100 * U
+      gi = gi + 1
+    end
   end
 end
 
@@ -273,6 +406,7 @@ local function layout()
   fonts.islS      = mkfont(10)
   fonts.islMed    = mkfont(15)
   fonts.islBig    = mkfont(44)
+  fonts.bootTitle = mkfont(30)
   island.w, island.h, island.wv, island.hv = 0, 0, 0, 0
 
   lastBg = nil
@@ -283,33 +417,16 @@ local function layout()
   c4 = love.graphics.newCanvas(math.max(1, math.floor(W / 4)), math.max(1, math.floor(H / 4)))
   c8 = love.graphics.newCanvas(math.max(1, math.floor(W / 8)), math.max(1, math.floor(H / 8)))
 
-  local size, cellW = 60 * U, W / 4
-  local gi, di = 0, 0
-  local dh = 84 * U
-  local dy = H - dh - 20 * U
-  for _, a in ipairs(apps) do
-    a.s = size
-    if a.dock then
-      local slot = (W - 32 * U) / 4
-      a.x = 16 * U + di * slot + (slot - size) / 2
-      a.y = dy + (dh - size) / 2
-      di = di + 1
-    else
-        a.x = (gi % 4) * cellW + (cellW - size) / 2
-        a.y = 200 * U + math.floor(gi / 4) * 100 * U
-        gi = gi + 1
-      end
-    end
+  layoutIcons()
+end
 
-    
-  end
-  
 function love.load()
   miniapps.init({
     size = function() return W, H, U end,
     fonts = fonts, buzz = buzz, DAYS = DAYS, MONTHS = MONTHS,
     notify = function(n) island.notify(n) end,
     current = function() return current and apps[current] or nil end,
+    iconRadius = shapeR,
   })
   for i, a in ipairs(miniapps.apps) do table.insert(apps, 2 + i, a) end
 
@@ -339,14 +456,42 @@ function love.load()
     end
   end
 
+  do
+    local okm, m = pcall(love.graphics.newShader, ICON_MASK_SRC)
+    if okm then iconMask = m end
+  end
+
   layout()
   for _, a in ipairs(apps) do
     if a.file then
       a.img, a.quad, a.qs = loadImage(a.file)
     end
   end
+  scanWallpapers()
   loadSettings()
+  layoutIcons()
   love.audio.setVolume(ccVal[2])
+
+  -- música: busca canciones y avisa a la isla cuando cambia algo
+  music.init()
+  music.onChange = function(kind, tr)
+    if not tr then return end
+    if island.mode == "music" then
+      island.cardT = 0 -- la tarjeta ya está abierta: no la pisamos con un aviso
+      return
+    end
+    island.notify({
+      iconfn = function(cx, cy, u, a) music.cover(cx - u, cy - u, 2 * u, a, tr) end,
+      name = music.fit(fonts.isl, tr.title, W - 150 * U),
+      sub = (kind == "pause") and "En pausa" or ((kind == "resume") and "Reanudado" or "Reproduciendo"),
+      dot = tr.color,
+      dur = 2.2,
+    })
+  end
+
+  bootLogo, bootLogoQuad, bootLogoQs = loadImage("logo.png")
+  boot.on = BOOT_ENABLED
+  boot.t = 0
 end
 
 function love.resize()
@@ -401,10 +546,16 @@ local function drawBackground()
   love.graphics.setCanvas(bgCanvas)
   love.graphics.clear(0, 0, 0, 1)
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(wall, 0, 0, 0, W, H)
+  if wallImg then
+    local iw, ih = wallImg:getDimensions()
+    local sc = math.max(W / iw, H / ih)
+    love.graphics.draw(wallImg, W / 2, H / 2, 0, sc, sc, iw / 2, ih / 2)
+  else
+    love.graphics.draw(wall, 0, 0, 0, W, H)
+  end
   love.graphics.setBlendMode("add")
   local t = love.timer.getTime()
-  for _, o in ipairs(orbs) do
+  for _, o in ipairs(P.orbs and orbs or {}) do
     local x = (o[1] + 0.10 * math.sin(t * o[5] + o[7])) * W
     local y = (o[2] + 0.08 * math.cos(t * o[6] + o[7])) * H
     local s = o[3] * W * 2 / 64
@@ -412,6 +563,10 @@ local function drawBackground()
     love.graphics.draw(orb, x, y, 0, s, s, 32, 32)
   end
   love.graphics.setBlendMode("alpha")
+  if P.dim > 0.01 then
+    love.graphics.setColor(0, 0, 0, P.dim * 0.7)
+    love.graphics.rectangle("fill", 0, 0, W, H)
+  end
   love.graphics.setCanvas()
 end
 
@@ -431,10 +586,15 @@ local ICONS = {}
 
 function ICONS.gear(x, y, s, alpha)
   local bg = {0.56, 0.58, 0.64}
+  local rf = shapeR()
   love.graphics.setColor(bg[1], bg[2], bg[3], alpha)
-  love.graphics.rectangle("fill", x, y, s, s, s * 0.22, s * 0.22)
+  love.graphics.rectangle("fill", x, y, s, s, s * rf, s * rf)
   love.graphics.setColor(1, 1, 1, 0.16 * alpha)
-  love.graphics.rectangle("fill", x + s * 0.04, y + s * 0.03, s * 0.92, s * 0.34, s * 0.18, s * 0.18)
+  if rf > 0.45 then
+    love.graphics.ellipse("fill", x + s / 2, y + s * 0.20, s * 0.34, s * 0.15, 32)
+  else
+    love.graphics.rectangle("fill", x + s * 0.04, y + s * 0.03, s * 0.92, s * 0.34, s * 0.18, s * 0.18)
+  end
 
   local cx, cy = x + s / 2, y + s / 2
   local ro = s * 0.235
@@ -455,20 +615,35 @@ function ICONS.gear(x, y, s, alpha)
 end
 
 local function drawIcon(a, x, y, s, alpha)
+  local rf = shapeR()
   if a.img then
     love.graphics.setColor(1, 1, 1, alpha)
+    local masked = iconMask and math.abs(rf - 0.22) > 0.005
+    if masked then
+      local iw, ih = a.img:getDimensions()
+      local qx, qy, qw, qh = 0, 0, 1, 1
+      if a.quad then
+        local vx, vy, vw, vh = a.quad:getViewport()
+        qx, qy, qw, qh = vx / iw, vy / ih, vw / iw, vh / ih
+      end
+      iconMask:send("qrect", {qx, qy, qw, qh})
+      iconMask:send("rad", rf)
+      iconMask:send("px", s)
+      love.graphics.setShader(iconMask)
+    end
     if a.quad then
       love.graphics.draw(a.img, a.quad, x, y, 0, s / a.qs, s / a.qs)
     else
       love.graphics.draw(a.img, x, y, 0, s / a.img:getWidth(), s / a.img:getHeight())
     end
+    if masked then love.graphics.setShader() end
   elseif a.iconfn then
     a.iconfn(x, y, s, alpha)
   elseif a.icon and ICONS[a.icon] then
     ICONS[a.icon](x, y, s, alpha)
   else
     love.graphics.setColor(a.color[1], a.color[2], a.color[3], alpha)
-    love.graphics.rectangle("fill", x, y, s, s, s * 0.22, s * 0.22)
+    love.graphics.rectangle("fill", x, y, s, s, s * rf, s * rf)
   end
 end
 
@@ -499,7 +674,7 @@ local function drawHome()
       y = a.y + (a.s - s) / 2
     end
     drawIcon(a, x, y, s, ha)
-    if not a.dock then
+    if not a.dock and P.labels then
       love.graphics.setFont(fonts.label)
       col(1, 1, 1, 0.9)
       love.graphics.printf(a.name, a.x - 10 * U, a.y + a.s + 6 * U, a.s + 20 * U, "center")
@@ -524,11 +699,31 @@ local SROWS = {
   {k = "head", t = "Pantalla y sonido"},
   {k = "sld", t = "Brillo", i = 1},
   {k = "sld", t = "Volumen", i = 2},
-  {k = "theme", t = "Fondo"},
+  {k = "head", t = "Personalización"},
+  {k = "prev"},
+  {k = "theme", t = "Color de fondo"},
+  {k = "wall", t = "Foto de fondo"},
+  {k = "tog", t = "Burbujas animadas", orbs = true},
+  {k = "sld", t = "Oscurecer fondo", p = "dim"},
+  {k = "sld", t = "Tamaño de los íconos", p = "iconSize"},
+  {k = "shape", t = "Forma de los íconos"},
+  {k = "tog", t = "Mostrar nombres", labels = true},
+  {k = "btn", t = "Restablecer personalización"},
   {k = "head", t = "Acerca de"},
-  {k = "info", t = "miOS Light", v = "v1.0"},
+  {k = "info", t = "miOS Light", v = "v1.1.0"},
 }
-local ROWH = {head = 30, tog = 48, sld = 64, theme = 76, info = 44}
+local ROWH = {head = 30, tog = 48, sld = 64, theme = 76, info = 44, prev = 124, wall = 76, shape = 76, btn = 44}
+
+-- posición de cada muestra de color (se usa para dibujar y para detectar el toque)
+local function swatchX(i)
+  return 20 * U + 16 * U + (i - 1) * 38 * U + 14 * U
+end
+
+-- botones de la fila "forma": ancho de cada uno y separación
+local function shapeChip()
+  local gap = 6 * U
+  return ((W - 40 * U) - 32 * U - gap * (#SHAPES - 1)) / #SHAPES, gap
+end
 
 local function setViewport()
   return 104 * U, H - 104 * U - 92 * U
@@ -573,6 +768,10 @@ local function drawSettings(ca)
             on = ASK_BEFORE_OPEN
           elseif r.island then
             on = ISLAND_ENABLED
+          elseif r.orbs then
+            on = P.orbs
+          elseif r.labels then
+            on = P.labels
           else
             on = ccOn[r.i]
           end
@@ -588,18 +787,24 @@ local function drawSettings(ca)
           love.graphics.circle("fill", on and (tx + tw - th / 2) or (tx + th / 2), ty + th / 2, th / 2 - 2 * U, 24)
 
         elseif r.k == "sld" then
+          local v = r.p and P[r.p] or ccVal[r.i]
           love.graphics.print(r.t, x0 + 16 * U, y + 10 * U)
           love.graphics.setFont(fonts.label)
           love.graphics.setColor(1, 1, 1, 0.6 * ca)
-          love.graphics.printf(string.format("%d%%", math.floor(ccVal[r.i] * 100 + 0.5)),
-            x0, y + 12 * U, w - 16 * U, "right")
+          local vt
+          if r.p == "iconSize" then
+            vt = string.format("%d", math.floor(48 + 24 * v + 0.5))
+          else
+            vt = string.format("%d%%", math.floor(v * 100 + 0.5))
+          end
+          love.graphics.printf(vt, x0, y + 12 * U, w - 16 * U, "right")
           local sx, sw, sy = x0 + 16 * U, w - 32 * U, y + r.h - 20 * U
           love.graphics.setColor(1, 1, 1, 0.20 * ca)
           love.graphics.rectangle("fill", sx, sy - 3 * U, sw, 6 * U, 3 * U, 3 * U)
           love.graphics.setColor(0.45, 0.70, 1, ca)
-          love.graphics.rectangle("fill", sx, sy - 3 * U, math.max(6 * U, sw * ccVal[r.i]), 6 * U, 3 * U, 3 * U)
+          love.graphics.rectangle("fill", sx, sy - 3 * U, math.max(6 * U, sw * v), 6 * U, 3 * U, 3 * U)
           love.graphics.setColor(1, 1, 1, ca)
-          love.graphics.circle("fill", sx + sw * ccVal[r.i], sy, 9 * U, 24)
+          love.graphics.circle("fill", sx + sw * v, sy, 9 * U, 24)
 
         elseif r.k == "theme" then
           love.graphics.print(r.t, x0 + 16 * U, y + 10 * U)
@@ -607,17 +812,113 @@ local function drawSettings(ca)
           love.graphics.setColor(1, 1, 1, 0.6 * ca)
           love.graphics.printf(themes[themeIdx].name, x0, y + 12 * U, w - 16 * U, "right")
           for i, t in ipairs(themes) do
-            local cx, cy = x0 + 16 * U + (i - 1) * 44 * U + 14 * U, y + r.h - 26 * U
+            local cx, cy = swatchX(i), y + r.h - 26 * U
             local c = t.orbs[1]
             love.graphics.setColor(c[1], c[2], c[3], ca)
-            love.graphics.circle("fill", cx, cy, 14 * U, 28)
+            love.graphics.circle("fill", cx, cy, 13 * U, 28)
             if i == themeIdx then
               love.graphics.setColor(1, 1, 1, ca)
               love.graphics.setLineWidth(2 * U)
-              love.graphics.circle("line", cx, cy, 18 * U, 28)
+              love.graphics.circle("line", cx, cy, 17 * U, 28)
               love.graphics.setLineWidth(1)
             end
           end
+
+        elseif r.k == "prev" then
+          -- vista previa con el fondo y los íconos actuales
+          local px0, py0, pw, ph = x0 + 12 * U, y + 12 * U, w - 24 * U, r.h - 24 * U
+          love.graphics.intersectScissor(px0, py0, pw, ph)
+          love.graphics.setColor(1, 1, 1, ca)
+          if wallImg then
+            local iw, ih = wallImg:getDimensions()
+            local sc = math.max(pw / iw, ph / ih)
+            love.graphics.draw(wallImg, px0 + pw / 2, py0 + ph / 2, 0, sc, sc, iw / 2, ih / 2)
+          else
+            love.graphics.draw(wall, px0, py0, 0, pw, ph)
+          end
+          if P.orbs then
+            love.graphics.setBlendMode("add")
+            for _, o in ipairs(orbs) do
+              local os_ = o[3] * pw * 2 / 64
+              love.graphics.setColor(o[4][1], o[4][2], o[4][3], 0.45 * ca)
+              love.graphics.draw(orb, px0 + o[1] * pw, py0 + o[2] * ph, 0, os_, os_, 32, 32)
+            end
+            love.graphics.setBlendMode("alpha")
+          end
+          if P.dim > 0.01 then
+            love.graphics.setColor(0, 0, 0, P.dim * 0.7 * ca)
+            love.graphics.rectangle("fill", px0, py0, pw, ph)
+          end
+          local ps = iconPx() * 0.72
+          local gap = (pw - 4 * ps) / 5
+          local lblH = P.labels and 14 * U or 0
+          local iy = py0 + (ph - ps - lblH) / 2
+          for k = 1, 4 do
+            local a = apps[k]
+            if a then
+              local ix = px0 + gap + (k - 1) * (ps + gap)
+              drawIcon(a, ix, iy, ps, ca)
+              if P.labels then
+                love.graphics.setFont(fonts.ccLabel)
+                love.graphics.setColor(1, 1, 1, 0.9 * ca)
+                love.graphics.printf(a.name, ix - gap / 2, iy + ps + 3 * U, ps + gap, "center")
+              end
+            end
+          end
+          love.graphics.setScissor(0, top, W, vh)
+
+        elseif r.k == "wall" then
+          love.graphics.print(r.t, x0 + 16 * U, y + 10 * U)
+          local n = #wallFiles
+          love.graphics.setFont(fonts.label)
+          love.graphics.setColor(1, 1, 1, 0.6 * ca)
+          if n > 0 then
+            love.graphics.printf(string.format("%d/%d", wallIndex(), n), x0, y + 12 * U, w - 16 * U, "right")
+            local ny = y + r.h - lh - 12 * U
+            love.graphics.setFont(fonts.hint)
+            love.graphics.setColor(1, 1, 1, 0.9 * ca)
+            local nm = P.wall and P.wall:gsub("%.%w+$", "") or "Ninguna"
+            nm = music.fit(fonts.hint, nm, w - 110 * U)
+            love.graphics.printf(nm, x0 + 40 * U, ny, w - 80 * U, "center")
+            -- flechas
+            local cy = ny + lh / 2
+            love.graphics.setColor(1, 1, 1, 0.8 * ca)
+            love.graphics.setLineWidth(2.5 * U)
+            love.graphics.line(x0 + 26 * U, cy - 7 * U, x0 + 19 * U, cy, x0 + 26 * U, cy + 7 * U)
+            love.graphics.line(x0 + w - 26 * U, cy - 7 * U, x0 + w - 19 * U, cy, x0 + w - 26 * U, cy + 7 * U)
+            love.graphics.setLineWidth(1)
+          else
+            love.graphics.printf("Sin fotos", x0, y + 12 * U, w - 16 * U, "right")
+            love.graphics.setColor(1, 1, 1, 0.5 * ca)
+            love.graphics.printf("Copiá imágenes png o jpg a la carpeta wallpapers/", x0 + 16 * U,
+              y + r.h - 34 * U, w - 32 * U, "left")
+          end
+
+        elseif r.k == "shape" then
+          love.graphics.print(r.t, x0 + 16 * U, y + 10 * U)
+          local cw, gap = shapeChip()
+          local chh = 28 * U
+          for i, sh in ipairs(SHAPES) do
+            local cx = x0 + 16 * U + (i - 1) * (cw + gap)
+            local cy = y + r.h - chh - 10 * U
+            if i == P.shape then
+              love.graphics.setColor(1, 1, 1, 0.92 * ca)
+            else
+              love.graphics.setColor(1, 1, 1, 0.14 * ca)
+            end
+            love.graphics.rectangle("fill", cx, cy, cw, chh, chh / 2, chh / 2)
+            love.graphics.setFont(fonts.label)
+            if i == P.shape then
+              love.graphics.setColor(0.08, 0.08, 0.12, ca)
+            else
+              love.graphics.setColor(1, 1, 1, 0.85 * ca)
+            end
+            love.graphics.printf(sh.name, cx, cy + (chh - fonts.label:getHeight()) / 2, cw, "center")
+          end
+
+        elseif r.k == "btn" then
+          love.graphics.setColor(1, 0.45, 0.40, ca)
+          love.graphics.printf(r.t, x0, y + (r.h - lh) / 2, w, "center")
 
         else
           love.graphics.print(r.t, x0 + 16 * U, y + (r.h - lh) / 2)
@@ -643,7 +944,7 @@ local function drawWindow()
   local e = prog
   local x, y = lerp(a.x, 0, e), lerp(a.y, 0, e)
   local w, h = lerp(a.s, W, e), lerp(a.s, H, e)
-  local r = lerp(a.s * 0.22, 0, e)
+  local r = lerp(a.s * shapeR(), 0, e)
 
   local bgA = clamp(e * 5, 0, 1)
   love.graphics.setColor(a.color[1] * 0.3 + 0.06, a.color[2] * 0.3 + 0.06, a.color[3] * 0.3 + 0.06, bgA)
@@ -1111,6 +1412,8 @@ end
 local function islandTarget()
   if island.mode == "card" then
     return W - 24 * U, 146 * U
+  elseif island.mode == "music" then
+    return W - 24 * U, 156 * U
   elseif island.mode == "notice" and island.notice then
     local n = island.notice
     if n.name then
@@ -1120,6 +1423,7 @@ local function islandTarget()
     end
     return 132 * U, 38 * U
   end
+  if music.active() then return 176 * U, 36 * U end
   return 118 * U, 34 * U
 end
 
@@ -1145,9 +1449,11 @@ function island.update(dt)
   if island.mode == "notice" then
     island.noticeT = island.noticeT + dt
     if island.noticeT >= island.noticeDur then island.setMode("idle") end
-  elseif island.mode == "card" then
+  elseif island.mode == "card" or island.mode == "music" then
     island.cardT = island.cardT + dt
-    if island.cardT >= 7 and not island.touch then island.setMode("idle") end
+    if (island.cardT >= 7 and not island.touch) or (island.mode == "music" and not music.current()) then
+      island.setMode("idle")
+    end
   end
 
   local tw, th = islandTarget()
@@ -1188,16 +1494,53 @@ function island.buttonAt(x, y)
   end
 end
 
+-- tarjeta de música: portada, barra de progreso y botones
+function island.musicLayout()
+  local tw, th = W - 24 * U, 156 * U
+  local x0, y0 = (W - tw) / 2, ISLAND_TOP * U
+  local by = y0 + th - 30 * U
+  return {
+    x0 = x0, y0 = y0, tw = tw, th = th,
+    cover = {x = x0 + 16 * U, y = y0 + 16 * U, s = 54 * U},
+    bar = {x = x0 + 20 * U, y = y0 + 88 * U, w = tw - 40 * U, h = 5 * U},
+    btn = {
+      prev = {cx = W / 2 - 74 * U, cy = by, r = 24 * U},
+      play = {cx = W / 2, cy = by, r = 26 * U},
+      next = {cx = W / 2 + 74 * U, cy = by, r = 24 * U},
+    },
+  }
+end
+
+function island.musicHit(x, y)
+  for k, b in pairs(island.musicLayout().btn) do
+    local dx, dy = x - b.cx, y - b.cy
+    if dx * dx + dy * dy <= (b.r + 8 * U) ^ 2 then return k end
+  end
+end
+
+function island.onBar(x, y)
+  local b = island.musicLayout().bar
+  return x >= b.x - 10 * U and x <= b.x + b.w + 10 * U and y >= b.y - 14 * U and y <= b.y + b.h + 14 * U
+end
+
+function island.seekFrac(x)
+  local b = island.musicLayout().bar
+  return clamp((x - b.x) / b.w, 0, 1)
+end
+
 function island.press(id, x, y)
   if not ISLAND_ENABLED or island.touch then return false end
   if ccP > 0.02 or ccTarget == 1 or ccDrag or lockDrag then return false end
   local x0, y0, w, h = island.rect()
-  local pad = (island.mode == "card") and 0 or 8 * U
+  local open = (island.mode == "card" or island.mode == "music")
+  local pad = open and 0 or 8 * U
   if x >= x0 - pad and x <= x0 + w + pad and y >= y0 - pad and y <= y0 + h + pad then
-    island.touch = {id = id, sx = x, sy = y, moved = 0}
+    island.touch = {id = id, sx = x, sy = y, moved = 0,
+                    seek = (island.mode == "music" and island.onBar(x, y)) or false}
+    if island.touch.seek then island.seekPos = island.seekFrac(x) end
     return true
   end
-  if island.mode == "card" then island.setMode("idle") end
+  if open then island.setMode("idle") end
   return false
 end
 
@@ -1205,6 +1548,10 @@ function island.move(id, x, y)
   local t = island.touch
   if t and t.id == id then
     t.moved = math.max(t.moved, math.abs(x - t.sx), math.abs(y - t.sy))
+    if t.seek then
+      island.seekPos = island.seekFrac(x)
+      island.cardT = 0
+    end
     return true
   end
   return false
@@ -1214,6 +1561,12 @@ function island.release(id, x, y)
   local t = island.touch
   if not t or t.id ~= id then return false end
   island.touch = nil
+  if t.seek then
+    music.seekFrac(island.seekFrac(x))
+    island.seekPos = nil
+    island.cardT = 0
+    return true
+  end
   if island.mode == "card" then
     if t.sy - y > 25 * U then
       island.setMode("idle")
@@ -1226,8 +1579,29 @@ function island.release(id, x, y)
         island.setMode("idle")
       end
     end
+  elseif island.mode == "music" then
+    if t.sy - y > 25 * U then
+      island.setMode("idle")
+    elseif y - t.sy > 25 * U then
+      island.setMode("card") -- deslizar hacia abajo: reloj y accesos rápidos
+    elseif t.moved < 10 * U then
+      local b = island.musicHit(x, y)
+      if b == "play" then
+        music.toggle()
+      elseif b == "prev" then
+        music.prev()
+      elseif b == "next" then
+        music.next()
+      end
+      if b then
+        buzz(0.008)
+        island.cardT = 0
+      else
+        island.setMode("idle")
+      end
+    end
   elseif t.moved < 10 * U or y - t.sy > 25 * U then
-    island.setMode("card")
+    island.setMode(music.active() and "music" or "card")
     buzz(0.01)
   end
   return true
@@ -1257,14 +1631,22 @@ function island.draw()
   if a <= 0 then return end
 
   if island.mode == "idle" then
-    -- cámara frontal
-    local cx, cy = x + w - 20 * U, y + h / 2
-    love.graphics.setColor(0.07, 0.07, 0.10, a)
-    love.graphics.circle("fill", cx, cy, 5.5 * U, 24)
-    love.graphics.setColor(0.12, 0.14, 0.26, a)
-    love.graphics.circle("fill", cx, cy, 3.2 * U, 24)
-    love.graphics.setColor(0.55, 0.65, 1.0, 0.6 * a)
-    love.graphics.circle("fill", cx - 1 * U, cy - 1 * U, 0.9 * U, 12)
+    local tr = music.active() and music.current()
+    if tr then
+      -- música: portada a la izquierda y ecualizador a la derecha
+      local cs = 22 * U
+      music.cover(x + 9 * U, y + (h - cs) / 2, cs, a, tr)
+      music.bars(x + w - 9 * U - 20 * U, y + h / 2 - 9 * U, 20 * U, 18 * U, a, music.playing, tr.color)
+    else
+      -- cámara frontal
+      local cx, cy = x + w - 20 * U, y + h / 2
+      love.graphics.setColor(0.07, 0.07, 0.10, a)
+      love.graphics.circle("fill", cx, cy, 5.5 * U, 24)
+      love.graphics.setColor(0.12, 0.14, 0.26, a)
+      love.graphics.circle("fill", cx, cy, 3.2 * U, 24)
+      love.graphics.setColor(0.55, 0.65, 1.0, 0.6 * a)
+      love.graphics.circle("fill", cx - 1 * U, cy - 1 * U, 0.9 * U, 12)
+    end
 
   elseif island.mode == "notice" and island.notice then
     local n = island.notice
@@ -1285,6 +1667,51 @@ function island.draw()
       end
     elseif n.iconfn then
       n.iconfn(x + w / 2, y + h / 2, 11 * U, a, island.noticeT)
+    end
+
+  elseif island.mode == "music" then
+    local tr = music.current()
+    if tr then
+      local L = island.musicLayout()
+      music.cover(L.cover.x, L.cover.y, L.cover.s, a, tr)
+
+      local tx = L.cover.x + L.cover.s + 12 * U
+      local maxw = L.x0 + L.tw - 16 * U - 28 * U - tx
+      love.graphics.setFont(fonts.islMed)
+      love.graphics.setColor(1, 1, 1, a)
+      love.graphics.print(music.fit(fonts.islMed, tr.title, maxw), tx, L.cover.y + 8 * U)
+      love.graphics.setFont(fonts.isl)
+      love.graphics.setColor(1, 1, 1, 0.55 * a)
+      love.graphics.print(music.fit(fonts.isl, tr.artist, maxw), tx,
+        L.cover.y + 8 * U + fonts.islMed:getHeight() + 1 * U)
+      music.bars(L.x0 + L.tw - 16 * U - 20 * U, L.cover.y + 4 * U, 20 * U, 18 * U, a, music.playing, tr.color)
+
+      -- progreso (se puede arrastrar para adelantar o atrasar)
+      local f = island.seekPos or music.progress()
+      local b = L.bar
+      love.graphics.setColor(1, 1, 1, 0.22 * a)
+      love.graphics.rectangle("fill", b.x, b.y, b.w, b.h, b.h / 2, b.h / 2)
+      love.graphics.setColor(1, 1, 1, 0.92 * a)
+      love.graphics.rectangle("fill", b.x, b.y, math.max(b.h, b.w * f), b.h, b.h / 2, b.h / 2)
+      if island.seekPos then
+        love.graphics.circle("fill", b.x + b.w * f, b.y + b.h / 2, 6 * U, 16)
+      end
+      love.graphics.setFont(fonts.islS)
+      love.graphics.setColor(1, 1, 1, 0.55 * a)
+      local cur = (music.dur > 0) and (f * music.dur) or music.pos
+      love.graphics.print(music.fmt(cur), b.x, b.y + 10 * U)
+      local ds = (music.dur > 0) and music.fmt(music.dur) or "--:--"
+      love.graphics.print(ds, b.x + b.w - fonts.islS:getWidth(ds), b.y + 10 * U)
+
+      -- anterior / reproducir-pausar / siguiente
+      local B = L.btn
+      music.icons.prev(B.prev.cx, B.prev.cy, 11 * U, a)
+      if music.playing then
+        music.icons.pause(B.play.cx, B.play.cy, 13 * U, a)
+      else
+        music.icons.play(B.play.cx, B.play.cy, 13 * U, a)
+      end
+      music.icons.next(B.next.cx, B.next.cy, 11 * U, a)
     end
 
   elseif island.mode == "card" then
@@ -1322,7 +1749,128 @@ function island.draw()
 
 end
 
+-- ============ boot ============
+local BOOT_STEPS = {
+  {0.00, "Iniciando miOS Light"},
+  {0.12, "Cargando el núcleo"},
+  {0.28, "Montando el almacenamiento"},
+  {0.42, "Iniciando servicios"},
+  {0.58, "Cargando íconos y fuentes"},
+  {0.72, "Preparando la interfaz"},
+  {0.88, "Casi listo"},
+}
+-- tiempo (0..1) -> avance de la barra (0..1): arranca rápido, se traba un poco y cierra de golpe
+local BOOT_KEYS = {{0, 0}, {0.10, 0.06}, {0.30, 0.28}, {0.38, 0.31}, {0.62, 0.66},
+                   {0.70, 0.69}, {0.90, 0.93}, {1, 1}}
+
+local function bootProgress(u)
+  for i = 2, #BOOT_KEYS do
+    local a, b = BOOT_KEYS[i - 1], BOOT_KEYS[i]
+    if u <= b[1] then
+      local k = (u - a[1]) / (b[1] - a[1])
+      k = k * k * (3 - 2 * k)
+      return lerp(a[2], b[2], k)
+    end
+  end
+  return 1
+end
+
+local function drawBoot()
+  local t = boot.t
+  local u = clamp(t / BOOT_TIME, 0, 1)
+  local ba = clamp((BOOT_TIME - t) / 0.7, 0, 1) -- se desvanece al final
+  local fin = clamp(t / 1.6, 0, 1)
+  fin = fin * fin * (3 - 2 * fin)
+
+  love.graphics.setColor(0.01, 0.01, 0.03, 1)
+  love.graphics.rectangle("fill", 0, 0, W, H)
+
+  local cx, cy = W / 2, H * 0.40
+
+  -- resplandor de colores que respira detrás del logo
+  local oc = themes[themeIdx].orbs
+  local pulse = 0.85 + 0.15 * math.sin(t * 2.2)
+  love.graphics.setBlendMode("add")
+  for i = 1, 3 do
+    local c = oc[i]
+    local ang = t * (0.5 + i * 0.15) + i * 2.1
+    local ox, oy = math.cos(ang) * 38 * U, math.sin(ang) * 30 * U
+    local s = (220 + i * 20) * U * pulse / 64
+    love.graphics.setColor(c[1], c[2], c[3], 0.45 * fin * ba)
+    love.graphics.draw(orb, cx + ox, cy + oy, 0, s, s, 32, 32)
+  end
+  love.graphics.setBlendMode("alpha")
+
+  -- logo
+  local ls = 100 * U * (0.82 + 0.18 * fin)
+  local lx, ly = cx - ls / 2, cy - ls / 2
+  if bootLogo then
+    love.graphics.setColor(1, 1, 1, fin * ba)
+    if bootLogoQuad then
+      love.graphics.draw(bootLogo, bootLogoQuad, lx, ly, 0, ls / bootLogoQs, ls / bootLogoQs)
+    else
+      love.graphics.draw(bootLogo, lx, ly, 0, ls / bootLogo:getWidth(), ls / bootLogo:getHeight())
+    end
+  else
+    love.graphics.setColor(0.10, 0.10, 0.16, fin * ba)
+    love.graphics.rectangle("fill", lx, ly, ls, ls, ls * 0.26, ls * 0.26)
+    love.graphics.setColor(1, 1, 1, 0.14 * fin * ba)
+    love.graphics.rectangle("fill", lx + ls * 0.04, ly + ls * 0.03, ls * 0.92, ls * 0.38, ls * 0.2, ls * 0.2)
+    love.graphics.setColor(1, 1, 1, 0.35 * fin * ba)
+    love.graphics.setLineWidth(1.5 * U)
+    love.graphics.rectangle("line", lx, ly, ls, ls, ls * 0.26, ls * 0.26)
+    love.graphics.setLineWidth(1)
+    local lf = fonts.lockClock
+    local gs = (ls * 0.62) / lf:getHeight()
+    love.graphics.setFont(lf)
+    love.graphics.setColor(1, 1, 1, fin * ba)
+    love.graphics.print("m", cx - lf:getWidth("m") * gs / 2, cy - lf:getHeight() * gs / 2 - ls * 0.04, 0, gs, gs)
+  end
+
+  -- nombre
+  local ta = clamp((t - 1.2) / 1.0, 0, 1)
+  love.graphics.setFont(fonts.bootTitle)
+  love.graphics.setColor(1, 1, 1, ta * ba)
+  love.graphics.printf("miOS Light", 0, cy + ls / 2 + 26 * U, W, "center")
+
+  -- barra de progreso y estado
+  local pa = clamp((t - 2.2) / 0.8, 0, 1)
+  local p = bootProgress(u)
+  local bw, bh = 180 * U, 5 * U
+  local bx, by = (W - bw) / 2, H * 0.78
+  love.graphics.setColor(1, 1, 1, 0.14 * pa * ba)
+  love.graphics.rectangle("fill", bx, by, bw, bh, bh / 2, bh / 2)
+  love.graphics.setColor(1, 1, 1, 0.92 * pa * ba)
+  love.graphics.rectangle("fill", bx, by, math.max(bh, bw * p), bh, bh / 2, bh / 2)
+
+  local msg = BOOT_STEPS[1][2]
+  for _, s in ipairs(BOOT_STEPS) do
+    if u >= s[1] then msg = s[2] end
+  end
+  love.graphics.setFont(fonts.hint)
+  love.graphics.setColor(1, 1, 1, 0.6 * pa * ba)
+  local mw = fonts.hint:getWidth(msg)
+  love.graphics.print(msg, (W - mw) / 2, by + 20 * U)
+  love.graphics.print(string.rep(".", math.floor(t * 3) % 4), (W + mw) / 2, by + 20 * U)
+  love.graphics.setFont(fonts.label)
+  love.graphics.setColor(1, 1, 1, 0.4 * pa * ba)
+  love.graphics.printf(string.format("%d%%", math.floor(p * 100)), 0, by + 44 * U, W, "center")
+end
+
+-- brillo: oscurece toda la pantalla
+local function drawDim()
+  if ccVal[1] < 1 then
+    love.graphics.setColor(0, 0, 0, (1 - ccVal[1]) * 0.7)
+    love.graphics.rectangle("fill", 0, 0, W, H)
+  end
+end
+
 function love.draw()
+  if boot.on then
+    drawBoot()
+    drawDim()
+    return
+  end
   drawBackground()
 
   -- escena completa a un canvas
@@ -1363,8 +1911,11 @@ function love.draw()
   drawCC()
   island.draw()
 
-  if ccVal[1] < 1 then
-    love.graphics.setColor(0, 0, 0, (1 - ccVal[1]) * 0.7)
+  drawDim()
+
+  -- entrada suave desde el boot hacia la pantalla de bloqueo
+  if boot.out < 0.8 then
+    love.graphics.setColor(0.01, 0.01, 0.03, 1 - boot.out / 0.8)
     love.graphics.rectangle("fill", 0, 0, W, H)
   end
 
@@ -1377,7 +1928,18 @@ end
 
 function love.update(dt)
   if ccOn[8] then love.timer.sleep(math.max(0, 1 / 30 - dt)) end
+  if boot.on then
+    boot.t = boot.t + math.min(dt, 0.1)
+    if boot.t >= BOOT_TIME then
+      boot.on = false
+      boot.out = 0
+      buzz(0.02)
+    end
+    return
+  end
   dt = math.min(dt, 0.05)
+  if boot.out < 0.8 then boot.out = boot.out + dt end
+  music.update(dt)
   for _, a in ipairs(apps) do
     if a.update then a.update(dt) end
   end
@@ -1454,8 +2016,20 @@ local sDrag, sSlider = nil, nil
 
 local function sliderFromX(r, x)
   local v = clamp((x - 36 * U) / (W - 72 * U), 0, 1)
-  ccVal[r.i] = v
-  if r.i == 2 then love.audio.setVolume(v) end
+  if r.p then
+    P[r.p] = v
+    if r.p == "iconSize" then layoutIcons() end
+  else
+    ccVal[r.i] = v
+    if r.i == 2 then love.audio.setVolume(v) end
+  end
+end
+
+local function resetPersonalization()
+  P.orbs, P.dim, P.iconSize, P.shape, P.labels = true, 0, 0.5, 2, true
+  setWallpaper(nil)
+  applyTheme(1)
+  layoutIcons()
 end
 
 local function settingsRowAt(x, y)
@@ -1479,20 +2053,44 @@ local function settingsActivate(r, x)
       island.notice = nil
       island.setMode("idle")
       buzz(0.01)
+    elseif r.orbs then
+      P.orbs = not P.orbs
+      buzz(0.01)
+    elseif r.labels then
+      P.labels = not P.labels
+      buzz(0.01)
     else
       toggleTile(r.i)
     end
     saveSettings()
   elseif r.k == "theme" then
     for i = 1, #themes do
-      local cx = 36 * U + (i - 1) * 44 * U + 14 * U
-      if math.abs(x - cx) < 22 * U then
+      local cx = swatchX(i)
+      if math.abs(x - cx) < 19 * U then
         applyTheme(i)
         buzz(0.01)
         saveSettings()
         break
       end
     end
+  elseif r.k == "wall" then
+    if #wallFiles > 0 then
+      cycleWall(x < W / 2 and -1 or 1)
+      buzz(0.01)
+      saveSettings()
+    end
+  elseif r.k == "shape" then
+    local cw, gap = shapeChip()
+    local i = math.floor((x - 36 * U) / (cw + gap)) + 1
+    if i >= 1 and i <= #SHAPES and i ~= P.shape then
+      P.shape = i
+      buzz(0.01)
+      saveSettings()
+    end
+  elseif r.k == "btn" then
+    resetPersonalization()
+    buzz(0.02)
+    saveSettings()
   end
 end
 
@@ -1550,6 +2148,7 @@ function love.wheelmoved(dx, dy)
 end
 
 local function pointerPressed(id, x, y)
+  if boot.on then return end
   if island.press(id, x, y) then return end
   if locked then
     if not lockDrag then
@@ -1596,6 +2195,7 @@ local function pointerPressed(id, x, y)
 end
 
 local function pointerMoved(id, x, y)
+  if boot.on then return end
   if island.move(id, x, y) then return end
   if settingsMove(id, x, y) then return end
   local ap = current and apps[current]
@@ -1653,6 +2253,7 @@ local function pointerMoved(id, x, y)
 end
 
 local function pointerReleased(id, x, y)
+  if boot.on then return end
   if island.release(id, x, y) then return end
   if settingsRelease(id, x, y) then return end
   local ap = current and apps[current]
@@ -1749,6 +2350,7 @@ local function pointerReleased(id, x, y)
 end
 
 function love.keypressed(key)
+  if boot.on then return end
   if current and apps[current].key and apps[current].key(key) then return end
   if key == "escape" or key == "back" then
     if ccTarget == 1 or ccP > 0.02 then

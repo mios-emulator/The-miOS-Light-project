@@ -1,6 +1,7 @@
 -- miniapps.lua - Teléfono, Reloj, Calculadora, Calendario, Rendimiento, Notas y 2048 para miOS Next
 local M = {}
 local ctx, fonts, DAYS, MONTHS
+local music = require("music")
 
 -- ============ utilidades ============
 local regs, held, curAct = {}, nil, nil
@@ -97,14 +98,21 @@ local function handset(cx, cy, s, ca, rot)
 end
 
 -- ============ iconos ============
+-- radio de las esquinas de los íconos (lo elige el usuario en Ajustes > Personalización)
+local function iconRadius()
+  return (ctx and ctx.iconRadius and ctx.iconRadius()) or 0.22
+end
+
 local function iconBase(x, y, s, alpha, r, g, b)
   love.graphics.setColor(r, g, b, alpha)
-  love.graphics.rectangle("fill", x, y, s, s, s * 0.22, s * 0.22)
+  local rr = s * iconRadius()
+  love.graphics.rectangle("fill", x, y, s, s, rr, rr)
 end
 
 local function iconPhone(x, y, s, alpha)
   iconBase(x, y, s, alpha, 0.20, 0.78, 0.35)
-  handset(x + s / 2, y + s / 2, s * 0.8, alpha)
+  local k = (iconRadius() > 0.45) and 0.84 or 1
+  handset(x + s / 2, y + s / 2, s * 0.8 * k, alpha)
 end
 
 local function iconClock(x, y, s, alpha)
@@ -132,6 +140,11 @@ end
 
 local function iconCalc(x, y, s, alpha)
   iconBase(x, y, s, alpha, 0.12, 0.12, 0.14)
+  local k = (iconRadius() > 0.45) and 0.80 or 1
+  love.graphics.push()
+  love.graphics.translate(x + s / 2, y + s / 2)
+  love.graphics.scale(k)
+  love.graphics.translate(-(x + s / 2), -(y + s / 2))
   local m = s * 0.13
   love.graphics.setColor(0.30, 0.30, 0.34, alpha)
   love.graphics.rectangle("fill", x + m, y + s * 0.14, s - 2 * m, s * 0.16, s * 0.04, s * 0.04)
@@ -146,6 +159,7 @@ local function iconCalc(x, y, s, alpha)
       love.graphics.rectangle("fill", x + m + c * (b + g), y + s * 0.37 + r * (b + g), b, b, s * 0.04, s * 0.04)
     end
   end
+  love.graphics.pop()
 end
 
 local ABBR = {"DOM", "LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB"}
@@ -1135,13 +1149,52 @@ local function nRelease(id, x, y)
   return true
 end
 
+-- contorno de un rectángulo redondeado como lista de puntos
+local function rrPoints(x, y, w, h, r, seg)
+  r = math.min(r, w / 2, h / 2)
+  local pts = {}
+  local function arc(cx, cy, a0)
+    for i = 0, seg do
+      local a = a0 + (math.pi / 2) * i / seg
+      pts[#pts + 1] = {cx + math.cos(a) * r, cy + math.sin(a) * r}
+    end
+  end
+  arc(x + w - r, y + r, -math.pi / 2)
+  arc(x + w - r, y + h - r, 0)
+  arc(x + r, y + h - r, math.pi / 2)
+  arc(x + r, y + r, math.pi)
+  return pts
+end
+
+-- se queda con la parte del polígono que está por debajo de la línea yc
+local function clipBelow(pts, yc)
+  local out, n = {}, #pts
+  for i = 1, n do
+    local a, b = pts[i], pts[i % n + 1]
+    local ain, bin = a[2] >= yc, b[2] >= yc
+    if ain then out[#out + 1] = a end
+    if ain ~= bin then
+      local t = (yc - a[2]) / (b[2] - a[2])
+      out[#out + 1] = {a[1] + (b[1] - a[1]) * t, yc}
+    end
+  end
+  return out
+end
+
 local function iconNotes(x, y, s, alpha)
-  local r = s * 0.22
+  local r = s * iconRadius()
   setc(1.0, 0.80, 0.15, 1, alpha)
   love.graphics.rectangle("fill", x, y, s, s, r, r)
   setc(0.99, 0.97, 0.90, 1, alpha)
-  love.graphics.rectangle("fill", x, y + s * 0.28, s, s - s * 0.28 - r)
-  love.graphics.rectangle("fill", x, y + s - 2 * r, s, 2 * r, r, r)
+  local pts = clipBelow(rrPoints(x, y, s, s, r, 8), y + s * 0.28)
+  if #pts >= 3 then
+    local flat = {}
+    for _, p in ipairs(pts) do
+      flat[#flat + 1] = p[1]
+      flat[#flat + 1] = p[2]
+    end
+    love.graphics.polygon("fill", flat)
+  end
   setc(0.80, 0.76, 0.62, 1, alpha)
   for i = 1, 3 do
     love.graphics.rectangle("fill", x + s * 0.2, y + s * 0.28 + i * s * 0.17, s * 0.6, math.max(1, s * 0.025))
@@ -1588,6 +1641,189 @@ local function iconG2(x, y, s, alpha)
   love.graphics.print("2048", x + s / 2 - f:getWidth("2048") * sc / 2, y + s / 2 - f:getHeight() * sc / 2, 0, sc, sc)
 end
 
+-- ============ MÚSICA ============
+local mu = {scroll = 0, maxScroll = 0, drag = nil, seek = nil, seekF = 0, bar = nil, cs = 0.88}
+
+local function iconMusic(x, y, s, alpha)
+  iconBase(x, y, s, alpha, 0.98, 0.24, 0.38)
+  music.note(x + s / 2, y + s / 2, s * 0.30, alpha)
+end
+
+local function muAct(n)
+  if n == "play" then
+    music.toggle()
+  elseif n == "prev" then
+    music.prev()
+  elseif n == "next" then
+    music.next()
+  elseif n:sub(1, 1) == "t" then
+    local i = tonumber(n:sub(2))
+    if i and i == music.idx then
+      music.toggle()
+    elseif i then
+      music.play(i)
+    end
+  end
+  ctx.buzz(0.008)
+end
+
+local function muUpdate(dt)
+  mu.cs = mix(mu.cs, music.playing and 1 or 0.88, 1 - math.exp(-dt * 10))
+end
+
+local function muKey(k)
+  if k == "space" then
+    music.toggle()
+    return true
+  elseif k == "right" then
+    music.next()
+    return true
+  elseif k == "left" then
+    music.prev()
+    return true
+  end
+  return false
+end
+
+local function drawMusic(ca)
+  begin(muAct)
+  local W, H, U, top, bot = area()
+  local tr = music.current()
+  local n = #music.tracks
+
+  -- portada (se agranda un poco cuando está sonando)
+  local cs = clampn((bot - top) * 0.27, 80 * U, 150 * U)
+  local s = cs * mu.cs
+  local cx, cy = W / 2, top + 6 * U + cs / 2
+  setc(0, 0, 0, 0.28, ca)
+  love.graphics.rectangle("fill", cx - s / 2 + 3 * U, cy - s / 2 + 8 * U, s, s, s * 0.22, s * 0.22)
+  music.cover(cx - s / 2, cy - s / 2, s, ca, tr)
+
+  -- título y artista
+  local ty = cy + cs / 2 + 26 * U
+  ctext(fonts.dTitle, tr and tr.title or "Sin reproducción", W / 2, ty, ca, 1, 1, 1, 1, W - 48 * U)
+  ctext(fonts.hint, tr and tr.artist or "Elegí una canción", W / 2, ty + 24 * U, ca, 1, 1, 1, 0.6, W - 48 * U)
+
+  -- barra de progreso (tocá o arrastrá para moverte en la canción)
+  local by = ty + 60 * U
+  local bx, bw, bh = 28 * U, W - 56 * U, 5 * U
+  mu.bar = {x = bx, y = by - bh / 2, w = bw, h = bh}
+  local f = mu.seek and mu.seekF or music.progress()
+  setc(1, 1, 1, 0.18, ca)
+  love.graphics.rectangle("fill", bx, by - bh / 2, bw, bh, bh / 2, bh / 2)
+  setc(1, 1, 1, 0.92, ca)
+  love.graphics.rectangle("fill", bx, by - bh / 2, math.max(bh, bw * f), bh, bh / 2, bh / 2)
+  if mu.seek then disc(bx + bw * f, by, 8 * U, ca, 1, 1, 1, 1) end
+  local cur = (music.dur > 0) and (f * music.dur) or music.pos
+  ltext(fonts.label, music.fmt(cur), bx, by + 18 * U, ca, 1, 1, 1, 0.55)
+  local ds = (music.dur > 0) and music.fmt(music.dur) or "--:--"
+  ltext(fonts.label, ds, bx + bw - fonts.label:getWidth(ds), by + 18 * U, ca, 1, 1, 1, 0.55)
+
+  -- anterior / reproducir-pausar / siguiente
+  local cy2 = by + 64 * U
+  local R, gx = 30 * U, 92 * U
+  music.icons.prev(W / 2 - gx, cy2, 13 * U, ca * (isHeld("prev") and 0.55 or 1))
+  disc(W / 2, cy2, R, ca, 1, 1, 1, isHeld("play") and 0.75 or 1)
+  if music.playing then
+    music.icons.pause(W / 2, cy2, 13 * U, ca, 0.10, 0.10, 0.14)
+  else
+    music.icons.play(W / 2 + 1 * U, cy2, 13 * U, ca, 0.10, 0.10, 0.14)
+  end
+  music.icons.next(W / 2 + gx, cy2, 13 * U, ca * (isHeld("next") and 0.55 or 1))
+  reg("prev", W / 2 - gx - 32 * U, cy2 - 32 * U, 64 * U, 64 * U)
+  reg("play", W / 2 - R, cy2 - R, 2 * R, 2 * R)
+  reg("next", W / 2 + gx - 32 * U, cy2 - 32 * U, 64 * U, 64 * U)
+
+  -- lista de canciones
+  local ly = cy2 + R + 18 * U
+  local hdr = music.hasFiles and ("LISTA · " .. n) or "DEMO · copiá tus canciones a la carpeta music/"
+  ltext(fonts.label, hdr, 28 * U, ly + 6 * U, ca, 1, 1, 1, 0.5, W - 56 * U)
+  local lt = ly + 20 * U
+  local vh = bot - lt - 4 * U
+  local rowH = 48 * U
+  mu.maxScroll = math.max(0, n * rowH - vh)
+  mu.scroll = clampn(mu.scroll, 0, mu.maxScroll)
+
+  if n == 0 then
+    ctext(fonts.hint, "No hay canciones", W / 2, lt + 30 * U, ca, 1, 1, 1, 0.7)
+    ctext(fonts.label, "Copiá mp3, ogg, wav o flac a la carpeta music/", W / 2, lt + 54 * U, ca, 1, 1, 1, 0.4, W - 40 * U)
+  elseif vh > 20 * U then
+    love.graphics.setScissor(0, lt, W, vh)
+    for i, t in ipairs(music.tracks) do
+      local y = lt + (i - 1) * rowH - mu.scroll
+      if y + rowH > lt and y < lt + vh then
+        local isCur = (i == music.idx)
+        setc(1, 1, 1, isHeld("t" .. i) and 0.16 or (isCur and 0.12 or 0.06), ca)
+        love.graphics.rectangle("fill", 20 * U, y + 2 * U, W - 40 * U, rowH - 4 * U, 12 * U, 12 * U)
+        music.cover(30 * U, y + (rowH - 32 * U) / 2, 32 * U, ca, t)
+        ltext(fonts.hint, t.title, 74 * U, y + rowH / 2 - 8 * U, ca, 1, 1, 1, isCur and 1 or 0.9, W - 74 * U - 70 * U)
+        ltext(fonts.label, t.artist, 74 * U, y + rowH / 2 + 10 * U, ca, 1, 1, 1, 0.5, W - 74 * U - 70 * U)
+        if isCur then
+          music.bars(W - 52 * U, y + rowH / 2 - 8 * U, 18 * U, 16 * U, ca, music.playing, t.color)
+        end
+        local ry0, ry1 = math.max(y, lt), math.min(y + rowH, lt + vh)
+        if ry1 > ry0 then reg("t" .. i, 20 * U, ry0, W - 40 * U, ry1 - ry0) end
+      end
+    end
+    love.graphics.setScissor()
+    if mu.maxScroll > 0 then
+      local sh = math.max(30 * U, vh * vh / (n * rowH))
+      local sy = lt + (vh - sh) * (mu.scroll / mu.maxScroll)
+      setc(1, 1, 1, 0.25, ca)
+      love.graphics.rectangle("fill", W - 5 * U, sy, 3 * U, sh, 1.5 * U, 1.5 * U)
+    end
+  end
+end
+
+local function muPress(id, x, y)
+  held = nil
+  local U = curU()
+  local b = mu.bar
+  if b and music.current() and x >= b.x - 12 * U and x <= b.x + b.w + 12 * U
+     and y >= b.y - 18 * U and y <= b.y + b.h + 18 * U then
+    mu.seek = {id = id}
+    mu.seekF = clampn((x - b.x) / b.w, 0, 1)
+    return
+  end
+  mu.drag = {id = id, sy = y, s0 = mu.scroll, moved = 0}
+  local r = regAt(x, y)
+  if r then held = {id = id, n = r.n} end
+end
+
+local function muMove(id, x, y)
+  if mu.seek and mu.seek.id == id then
+    local b = mu.bar
+    if b then mu.seekF = clampn((x - b.x) / b.w, 0, 1) end
+    return true
+  end
+  local d = mu.drag
+  if not d or d.id ~= id then return false end
+  d.moved = math.max(d.moved, math.abs(y - d.sy))
+  if d.moved > 8 * curU() then
+    held = nil
+    mu.scroll = clampn(d.s0 + (d.sy - y), 0, mu.maxScroll)
+  end
+  return true
+end
+
+local function muRelease(id, x, y)
+  if mu.seek and mu.seek.id == id then
+    music.seekFrac(mu.seekF)
+    mu.seek = nil
+    return true
+  end
+  local d = mu.drag
+  if not d or d.id ~= id then return false end
+  mu.drag = nil
+  local name = held and held.n
+  held = nil
+  if d.moved < 10 * curU() and name then
+    local r = regAt(x, y)
+    if r and r.n == name then muAct(name) end
+  end
+  return true
+end
+
 -- ============ registro ============
 local function mk(def)
   def.press, def.move, def.release = press, move, release
@@ -1621,6 +1857,12 @@ function M.init(c)
   gApp.press, gApp.move, gApp.release = gPress, gMove, gRelease
   M.apps[#M.apps + 1] = nApp
   M.apps[#M.apps + 1] = gApp
+
+  -- Música: lista con scroll y barra de progreso arrastrable
+  local muApp = mk{name = "Música", color = {0.55, 0.14, 0.26}, iconfn = iconMusic,
+                   draw = drawMusic, update = muUpdate, key = muKey}
+  muApp.press, muApp.move, muApp.release = muPress, muMove, muRelease
+  M.apps[#M.apps + 1] = muApp
 
   notesLoad()
   g2LoadBest()

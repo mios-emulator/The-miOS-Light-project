@@ -11,3 +11,4 @@ function love.conf(t)
     t.window.resizable = true
     t.window.vsync = 1
 end
+-- nota: podés también cambiar el VSync a 0 para que sea de unlock fps
