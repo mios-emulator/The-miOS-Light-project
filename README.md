@@ -33,7 +33,7 @@ Un entorno de escritorio móvil fluido, minimalista e hiper-personalizable inspi
 
 ---
 
-## 🛠️ Requisitos e Instalación
+## 🛠️ Requisitos y como correr el código completo 
 
 ### Requisitos Previos
 * **LÖVE 11.x (LOVE2D)** para Windows, Linux, macOS o Android.
